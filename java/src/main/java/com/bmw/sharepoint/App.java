@@ -1,14 +1,12 @@
 package com.bmw.sharepoint;
 
-import com.azure.core.credential.AccessToken;
 import com.azure.core.credential.TokenCredential;
-import com.azure.core.credential.TokenRequestContext;
+import com.azure.identity.DefaultAzureCredentialBuilder;
 import com.microsoft.graph.serviceclient.GraphServiceClient;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.OffsetDateTime;
 import java.util.Properties;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -74,18 +72,23 @@ public class App {
         String destinationFileName = args.length > 1 ? args[1] : filePath.getFileName().toString();
         String folderPath = config.folderPath() != null ? config.folderPath() : "";
 
-        // Authenticate using az CLI with explicit tenant
-        TokenCredential credential = createCliCredential(config.tenantId());
+        // Authenticate using DefaultAzureCredential (supports az CLI, managed identity, env vars, etc.)
+        var credentialBuilder = new DefaultAzureCredentialBuilder();
+        if (config.tenantId() != null) {
+            credentialBuilder.tenantId(config.tenantId());
+        }
+        TokenCredential credential = credentialBuilder.build();
         var graphClient = new GraphServiceClient(credential, "https://graph.microsoft.com/.default");
 
         try {
-            // Resolve the SharePoint site ID via direct HTTP (Kiota encodes colons in path-based addressing)
+            // Resolve the SharePoint site
             logger.info("Resolving site: " + config.siteHostname() + config.sitePath());
-            String siteId = resolveSiteId(credential, config.tenantId(), config.siteHostname(), config.sitePath());
-            if (siteId == null) {
+            var site = graphClient.sites().bySiteId(config.siteHostname() + ":" + config.sitePath() + ":").get();
+            if (site == null) {
                 logger.severe("Could not resolve SharePoint site.");
                 return 1;
             }
+            String siteId = site.getId();
 
             // Get the document library drive
             String targetDriveId;
@@ -139,91 +142,5 @@ public class App {
         return baseName + newExtension;
     }
 
-    private static String resolveSiteId(com.azure.core.credential.TokenCredential credential, String tenantId, String hostname, String sitePath) {
-        try {
-            var tokenRequest = new com.azure.core.credential.TokenRequestContext()
-                    .addScopes("https://graph.microsoft.com/.default");
-            if (tenantId != null) {
-                tokenRequest.setTenantId(tenantId);
-            }
-            String token = credential.getTokenSync(tokenRequest).getToken();
 
-            var httpClient = java.net.http.HttpClient.newHttpClient();
-            var uri = java.net.URI.create("https://graph.microsoft.com/v1.0/sites/" + hostname + ":" + sitePath);
-            var request = java.net.http.HttpRequest.newBuilder(uri)
-                    .header("Authorization", "Bearer " + token)
-                    .GET()
-                    .build();
-
-            var response = httpClient.send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() != 200) {
-                logger.severe("Site resolution failed (HTTP " + response.statusCode() + "): " + response.body());
-                return null;
-            }
-
-            // Parse "id" from JSON response (avoid adding JSON dependency just for this)
-            String body = response.body();
-            int idIdx = body.indexOf("\"id\"");
-            if (idIdx < 0) return null;
-            int colonIdx = body.indexOf(':', idIdx);
-            int startQuote = body.indexOf('"', colonIdx + 1);
-            int endQuote = body.indexOf('"', startQuote + 1);
-            return body.substring(startQuote + 1, endQuote);
-        } catch (Exception e) {
-            logger.log(Level.SEVERE, "Failed to resolve site ID", e);
-            return null;
-        }
-    }
-
-    private static TokenCredential createCliCredential(String tenantId) {
-        return new TokenCredential() {
-            private AccessToken cachedToken;
-
-            @Override
-            public reactor.core.publisher.Mono<AccessToken> getToken(TokenRequestContext context) {
-                return reactor.core.publisher.Mono.fromCallable(() -> getTokenSync(context));
-            }
-
-            @Override
-            public synchronized AccessToken getTokenSync(TokenRequestContext context) {
-                if (cachedToken != null && cachedToken.getExpiresAt().isAfter(OffsetDateTime.now().plusMinutes(5))) {
-                    return cachedToken;
-                }
-                try {
-                    var command = new java.util.ArrayList<String>();
-                    boolean isWindows = System.getProperty("os.name").toLowerCase().contains("win");
-                    if (isWindows) {
-                        command.add("cmd");
-                        command.add("/c");
-                    }
-                    command.add("az");
-                    command.add("account");
-                    command.add("get-access-token");
-                    command.add("--resource");
-                    command.add("https://graph.microsoft.com");
-                    if (tenantId != null) {
-                        command.add("--tenant");
-                        command.add(tenantId);
-                    }
-                    command.add("--query");
-                    command.add("accessToken");
-                    command.add("-o");
-                    command.add("tsv");
-
-                    var process = new ProcessBuilder(command)
-                            .redirectErrorStream(true)
-                            .start();
-                    String token = new String(process.getInputStream().readAllBytes()).trim();
-                    int exitCode = process.waitFor();
-                    if (exitCode != 0) {
-                        throw new RuntimeException("az CLI failed (exit " + exitCode + "): " + token);
-                    }
-                    cachedToken = new AccessToken(token, OffsetDateTime.now().plusHours(1));
-                    return cachedToken;
-                } catch (Exception e) {
-                    throw new RuntimeException("Failed to get token via az CLI", e);
-                }
-            }
-        };
-    }
 }
