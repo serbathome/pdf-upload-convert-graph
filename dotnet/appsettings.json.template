@@ -1,0 +1,11 @@
+{
+  "AzureAd": {
+    "TenantId": "<your tenant id>"
+  },
+  "SharePoint": {
+    "SiteHostname": "<your sharepoint site hostname>",
+    "SitePath": "<your sharepoint site path>",
+    "DriveId": "",
+    "FolderPath": "General"
+  }
+}
