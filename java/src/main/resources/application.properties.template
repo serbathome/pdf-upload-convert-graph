@@ -1,0 +1,5 @@
+azure.tenant-id=<your tenant id>
+sharepoint.site-hostname=<your sharepoint site hostname>
+sharepoint.site-path=<your sharepoint site path>
+sharepoint.drive-id=
+sharepoint.folder-path=General
