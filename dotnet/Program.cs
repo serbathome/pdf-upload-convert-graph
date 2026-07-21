@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Graph;
 using Microsoft.Graph.Drives.Item.Items.Item.CreateUploadSession;
+using Microsoft.Graph.Drives.Item.List.Items.Item.Fields;
 using Microsoft.Graph.Models;
 
 var configuration = new ConfigurationBuilder()
@@ -144,6 +145,27 @@ try
     }
 
     Console.WriteLine($"Upload complete. Item ID: {uploadedItemId}, url: {uploadedItemUrl}");
+
+    // Update SharePoint column metadata on the uploaded document.
+    if (uploadedItemId != null)
+    {
+        Console.WriteLine("Updating document metadata...");
+
+        var fieldValueSet = new FieldValueSet
+        {
+            AdditionalData = new Dictionary<string, object>
+            {
+                { "Department", "Engineering" },
+                { "CostCenter", 12345 }
+            }
+        };
+
+        var fieldsUrl = $"https://graph.microsoft.com/v1.0/drives/{targetDriveId}/items/{uploadedItemId}/listItem/fields";
+        var fieldsBuilder = new FieldsRequestBuilder(fieldsUrl, graphClient.RequestAdapter);
+        await fieldsBuilder.PatchAsync(fieldValueSet);
+
+        Console.WriteLine("Metadata updated.");
+    }
 
     // Convert to PDF if office document
     var fileExtension = Path.GetExtension(filePath).ToLowerInvariant();
